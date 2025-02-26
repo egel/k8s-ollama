@@ -1,0 +1,90 @@
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: ollama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: ollama
+  template:
+    metadata:
+      labels:
+        name: ollama
+    spec:
+      containers:
+      - name: ollama
+        image: ollama/ollama:0.3.5
+        volumeMounts:
+          - name: ollama-pv-storage
+            mountPath: /root/.ollama
+        ports:
+        - name: http
+          containerPort: 11434
+          protocol: TCP
+        env:
+        - name: PRELOAD_MODELS
+          value: "llama3.1,codellama:7b"
+        - name: OLLAMA_KEEP_ALIVE
+          value: "12h"
+            # lifecycle:
+            #   postStart:
+            #     exec:
+            #       command: ["/bin/sh", "-c", "sleep 20; for model in $PRELOAD_MODELS; do echo $model; ollama pull $model; done"]
+        readinessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 1
+          successThreshold: 1
+          failureThreshold: 3
+        livenessProbe:
+          httpGet:
+            path: /
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 10
+          timeoutSeconds: 1
+          successThreshold: 1
+          failureThreshold: 3
+      volumes:
+      - name: ollama-pv-storage
+        persistentVolumeClaim:
+          claimName: ollama-pvc
+      priorityClassName: system-node-critical
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-service
+  namespace: ollama
+spec:
+  type: ClusterIP
+  selector:
+    name: ollama
+  ports:
+  - port: 11434
+    name: http
+    targetPort: http # name of port used in deploy
+    protocol: TCP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-service-node-port
+spec:
+  type: NodePort
+  selector:
+    name: ollama
+  ports:
+  - name: http
+    port: 11434
+    targetPort: 11434
+    nodePort: 31434
+    protocol: TCP
