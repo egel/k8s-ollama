@@ -1,0 +1,154 @@
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: ollama-pv
+  namespace: ollama
+spec:
+  storageClassName: ""
+  claimRef:
+    name: ollama-pvc
+    namespace: ollama
+  capacity:
+    storage: 20Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    path: /data/k8s/ollama
+    server: cplane1 # IP or name of master like: cplane1
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: ollama-pvc
+  namespace: ollama
+spec:
+  storageClassName: ""
+  volumeName: ollama-pv
+  accessModes:
+    - ReadWriteMany
+  volumeMode: Filesystem
+  resources:
+    requests:
+      storage: 20Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ollama
+  namespace: ollama
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      name: ollama
+  template:
+    metadata:
+      labels:
+        name: ollama
+    spec:
+      containers:
+        - name: ollama
+          image: ollama/ollama:latest
+          volumeMounts:
+            - name: ollama-pv-storage
+              mountPath: /root/.ollama
+          ports:
+            - name: http
+              containerPort: 11434
+              protocol: TCP
+          env:
+            - name: PRELOAD_MODELS
+              value: "llama3.2"
+            - name: OLLAMA_KEEP_ALIVE
+              value: "12h"
+              # lifecycle:
+              #   postStart:
+              #     exec:
+              #       command: ["/bin/sh", "-c", "sleep 20; for model in $PRELOAD_MODELS; do echo $model; ollama pull $model; done"]
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 1
+            successThreshold: 1
+            failureThreshold: 3
+      volumes:
+        - name: ollama-pv-storage
+          persistentVolumeClaim:
+            claimName: ollama-pvc
+      priorityClassName: system-node-critical
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-service
+  namespace: ollama
+spec:
+  type: ClusterIP
+  selector:
+    name: ollama
+  ports:
+    - port: 80
+      name: http
+      targetPort: http # name of port used in deploy
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: ollama-service-node-port
+spec:
+  type: NodePort
+  selector:
+    name: ollama
+  ports:
+    - name: http
+      port: 11434
+      targetPort: 11434
+      nodePort: 31434
+      protocol: TCP
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: ollama-ingress
+  namespace: ollama
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /$2
+    nginx.ingress.kubernetes.io/auth-type: basic
+    nginx.ingress.kubernetes.io/auth-secret: basic-auth
+    nginx.ingress.kubernetes.io/auth-realm: "Authentication Required"
+    nginx.ingress.kubernetes.io/proxy-connect-timeout: "90"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "300"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "300"
+    nginx.ingress.kubernetes.io/upstream-keepalive-timeout: "300"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - ollama.service
+      secretName: ollama
+  rules:
+    - host: ollama.service
+      http:
+        paths:
+          - path: /()(.*)
+            pathType: Prefix
+            backend:
+              service:
+                name: ollama
+                port:
+                  number: 80
